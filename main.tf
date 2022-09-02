@@ -18,7 +18,7 @@ resource "azurerm_resource_group" "mtc-rg" {
     environment = "dev"
   }
 }
-
+# Create virtual network
 resource "azurerm_virtual_network" "mtc-vn" {
   name                = "mtc-network"
   resource_group_name = azurerm_resource_group.mtc-rg.name
@@ -29,14 +29,14 @@ resource "azurerm_virtual_network" "mtc-vn" {
     environment = "dev"
   }
 }
-
+# Create subnet
 resource "azurerm_subnet" "mtc-subnet" {
   name                 = "mtc-subnet"
   resource_group_name  = azurerm_resource_group.mtc-rg.name
   virtual_network_name = azurerm_virtual_network.mtc-vn.name
   address_prefixes     = ["10.123.1.0/24"]
 }
-
+# Create Network Security Group and rule
 resource "azurerm_network_security_group" "mtc-sg" {
   name                = "mtc-network"
   location            = azurerm_resource_group.mtc-rg.location
@@ -57,13 +57,14 @@ resource "azurerm_network_security_group" "mtc-sg" {
   }
 
 }
+# Connect the security group to the network interface
 
 resource "azurerm_subnet_network_security_group_association" "mtc-sga" {
   subnet_id                 = azurerm_subnet.mtc-subnet.id
   network_security_group_id = azurerm_network_security_group.mtc-sg.id
 }
 
-//give the vm a way to connect to the internet by giving it a public ip address
+//Create public IPs
 resource "azurerm_public_ip" "mtc-ip" {
   name                = "mtc-ip"
   location            = azurerm_resource_group.mtc-rg.location
@@ -74,20 +75,64 @@ resource "azurerm_public_ip" "mtc-ip" {
     environment = "dev"
   }
 }
-
+# Create network interface
 resource "azurerm_network_interface" "mtc-nic" {
-    name = "mtc-nic"
-    location = azurerm_resource_group.mtc-rg.location
+  name                = "mtc-nic"
+  location            = azurerm_resource_group.mtc-rg.location
+  resource_group_name = azurerm_resource_group.mtc-rg.name
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.mtc-subnet.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = azurerm_public_ip.mtc-ip.id
+  }
+
+  tags = {
+    environment = "dev"
+  }
+}
+
+resource "azurerm_linux_virtual_machine" "mtc-vm" {
+  name                  = "mtc-vm"
+  resource_group_name   = azurerm_resource_group.mtc-rg.name
+  location              = azurerm_resource_group.mtc-rg.location
+  size                  = "Standard_B1s"
+  admin_username        = "adminuser"
+  network_interface_ids = [azurerm_network_interface.mtc-nic.id]
+
+  custom_data = filebase64("customdata.tpl")
+
+  admin_ssh_key {
+    username   = "adminuser"
+    public_key = file("~/.ssh/mtcazurekey.pub") //this file functions extracts the content of the file and uses it as a value
+  }
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "UbuntuServer"
+    sku       = "16.04-LTS"
+    version   = "latest"
+  }
+  provisioner "local-exec" {
+    command = templatefile("macos-ssh-script.tpl", {
+      hostname     = self.public_ip_address
+      user         = "adminuser"
+      identityfile = "~/.ssh/mtcazurekey"
+    })
+    interpreter = [
+      "bash", "-c"
+    ]
+  }
+  tags = {
+    environment = "dev"
+  }
+}
+#query vm to get its ip address
+data "azurerm_public_ip" "mtc-ip-data"{
+    name = azurerm_public_ip.mtc-ip.name
     resource_group_name = azurerm_resource_group.mtc-rg.name
-
-    ip_configuration {
-      name = "internal"
-      subnet_id = azurerm_subnet.mtc-subnet.id
-      private_ip_address_allocation = "Dynamic"
-      public_ip_address_id = azurerm_public_ip.mtc-ip.id
-    }
-
-    tags = {
-        environment = "dev"
-    }
 }
